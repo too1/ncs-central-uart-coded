@@ -442,12 +442,40 @@ static void scan_filter_match(struct bt_scan_device_info *device_info,
 			      struct bt_scan_filter_match *filter_match,
 			      bool connectable)
 {
+	int err;
 	char addr[BT_ADDR_LE_STR_LEN];
+	struct bt_conn_le_create_param *conn_params;
 
 	bt_addr_le_to_str(device_info->recv_info->addr, addr, sizeof(addr));
 
 	LOG_INF("Filters matched. Address: %s connectable: %d",
 		log_strdup(addr), connectable);
+
+	err = bt_scan_stop();
+	if (err) {
+		printk("Stop LE scan failed (err %d)\n", err);
+	}
+
+	conn_params = BT_CONN_LE_CREATE_PARAM(
+			BT_CONN_LE_OPT_CODED | BT_CONN_LE_OPT_NO_1M,
+			BT_GAP_SCAN_FAST_INTERVAL,
+			BT_GAP_SCAN_FAST_INTERVAL);
+
+	err = bt_conn_le_create(device_info->recv_info->addr, conn_params,
+				BT_LE_CONN_PARAM_DEFAULT,
+				&default_conn);
+
+	if (err) {
+		printk("Create conn failed (err %d)\n", err);
+
+		err = bt_scan_start(BT_SCAN_TYPE_SCAN_ACTIVE);
+		if (err) {
+			printk("Scanning failed to start (err %d)\n", err);
+			return;
+		}
+	}
+
+	printk("Connection pending\n");
 }
 
 static void scan_connecting_error(struct bt_scan_device_info *device_info)
@@ -487,8 +515,20 @@ BT_SCAN_CB_INIT(scan_cb, scan_filter_match, NULL,
 static int scan_init(void)
 {
 	int err;
+
+	/* Use active scanning and disable duplicate filtering to handle any
+	 * devices that might update their advertising data at runtime. */
+	struct bt_le_scan_param scan_param = {
+		.type     = BT_LE_SCAN_TYPE_ACTIVE,
+		.interval = BT_GAP_SCAN_FAST_INTERVAL,
+		.window   = BT_GAP_SCAN_FAST_WINDOW,
+		.options  = BT_LE_SCAN_OPT_CODED | BT_LE_SCAN_OPT_NO_1M
+	};
+
 	struct bt_scan_init_param scan_init = {
-		.connect_if_match = 1,
+		.connect_if_match = 0,
+		.scan_param = &scan_param,
+		.conn_param = NULL
 	};
 
 	bt_scan_init(&scan_init);
@@ -496,18 +536,15 @@ static int scan_init(void)
 
 	err = bt_scan_filter_add(BT_SCAN_FILTER_TYPE_UUID, BT_UUID_NUS_SERVICE);
 	if (err) {
-		LOG_ERR("Scanning filters cannot be set (err %d)", err);
-		return err;
+		printk("Scanning filters cannot be set (err %d)\n", err);
+
+		return;
 	}
 
 	err = bt_scan_filter_enable(BT_SCAN_UUID_FILTER, false);
 	if (err) {
-		LOG_ERR("Filters cannot be turned on (err %d)", err);
-		return err;
+		printk("Filters cannot be turned on (err %d)\n", err);
 	}
-
-	LOG_INF("Scan module initialized");
-	return err;
 }
 
 
